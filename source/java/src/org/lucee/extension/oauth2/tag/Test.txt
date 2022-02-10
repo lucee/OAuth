@@ -1,0 +1,417 @@
+package org.lucee.extension.oauth2.tag;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintStream;
+import java.net.URL;
+import java.net.URLConnection;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.jsp.JspException;
+
+import org.apache.oltu.oauth2.common.utils.JSONUtils;
+
+public class OauthTag extends GenericTag {
+	private String socialclientid;
+	private String scope;
+	private String state;
+	private String type;
+	private String authendpoint;
+	private String accesstokenendpoint;
+	private String secretkey;
+	private String redirecturi;
+	private String result;
+	private String urlparams;
+
+	public OauthTag() {
+		this.socialclientid = "";
+		this.scope = "";
+		this.state = "";
+		this.type = "";
+		this.authendpoint = "";
+		this.accesstokenendpoint = "";
+		this.secretkey = "";
+		this.redirecturi = "";
+		this.result = "";
+		this.urlparams = "";
+	}
+
+	public int doStartTag() {
+		this.onTagStart();
+		final HttpServletRequest req = (HttpServletRequest) this.pageContext.getRequest();
+		if ("google".equals(this.type) && !this.scope.contains("https://www.googleapis.com/auth/userinfo.profile")) {
+			this.scope = "https://www.googleapis.com/auth/userinfo.profile+" + this.scope;
+		}
+		if (isNull(this.redirecturi)) {
+			this.redirecturi = req.getRequestURL().toString();
+		}
+		if (this.isError(req)) {
+			this.handleError(req);
+		} else if (this.isFirstCall(req)) {
+			this.doUserAuthentication();
+		} else {
+			try {
+				this.doAppAuthentication(req);
+			} catch (Exception e) {
+				throw new OauthAppAuthenticationException(e);
+			}
+		}
+		return 0;
+	}
+
+	public int doEndTag() throws JspException {
+		this.release();
+		this.onTagEnd();
+		return 6;
+	}
+
+	private void doUserAuthentication() {
+		this.validateType();
+		final String url = this.buildUserAuthUrl().toString();
+		final HttpServletResponse res = (HttpServletResponse) this.pageContext.getResponse();
+		try {
+			res.setStatus(302);
+			res.setHeader("location", url);
+			res.setHeader("Cache-Control", "no-cache");
+			res.setHeader("Pragma", "no-cache");
+		} catch (IllegalStateException e) {
+			throw new LocationTag.InvalidLocationException(false);
+		}
+		CFLogs.SERVER_LOG.debug("OAuth login : Redirecting user to Oauth server - " + this.type);
+		throw new AbortException();
+	}
+
+	private void doAppAuthentication(final HttpServletRequest req) throws Exception {
+		final String code = this.request.getParameter("code");
+		CFLogs.SERVER_LOG.debug("OAuth login : Oauth server returned code - " + code);
+		this.validateScretkey();
+		final String query = this.buildAppAuthUrl(code, this.redirecturi);
+		String accesstoken = "";
+		final String endpoint = OauthConstants.APP_AUTH_END_POINTS.get(this.type);
+		final String response = makeHttpCall(isNull(endpoint) ? this.accesstokenendpoint : endpoint, query);
+		if (!isNull(response)) {
+			if ("facebook".equals(this.type)) {
+				accesstoken = this.getFacebookAccesstoken(response);
+			} else if ("google".equals(this.type)) {
+				accesstoken = this.getGoogleAccesstoken(response);
+			} else {
+				accesstoken = this.getOthersAccesstoken(response);
+			}
+			if (isNull(accesstoken)) {
+				this.pageContext.setAttribute(this.result, (Object) response);
+			} else {
+				final Struct r = this.getBasicUserInfo(accesstoken);
+				r.put("state", req.getParameter("state"));
+				this.pageContext.setAttribute(this.result, (Object) r);
+			}
+			return;
+		}
+		throw new OauthServiceException();
+	}
+
+	private String getGoogleAccesstoken(final String response) {
+		final Struct jsonresp = (Struct) JSONUtils.deserializeJSON(response);
+		return (String) jsonresp.get("access_token");
+	}
+
+	private String getOthersAccesstoken(final String response) {
+		return this.getGoogleAccesstoken(response);
+	}
+
+	private String getFacebookAccesstoken(final String response) {
+		final JsonObject jobj = new JsonObject(response);
+		return jobj.getString("access_token");
+	}
+
+	private Struct getBasicUserInfo(final String accesstoken) {
+		final String api = OauthConstants.API_END_POINTS.get(this.type);
+		final Struct result = new Struct();
+		result.put("access_token", accesstoken);
+		if (isNull(api)) {
+			return result;
+		}
+		final String params = "access_token=" + accesstoken;
+		final String response = makeCfhttpCall(api, params);
+		if (!isNull(response)) {
+			final Struct jsonresp = (Struct) JSONUtils.deserializeJSON(response);
+			result.put("name", jsonresp.remove("name"));
+			result.put("locale", jsonresp.remove("locale"));
+			result.put("gender", jsonresp.remove("gender"));
+			result.put("id", jsonresp.remove("id"));
+			result.put("other", jsonresp);
+		}
+		return result;
+	}
+
+	private static String makeHttpCall(final String urlstr, final String params) {
+		final StringBuilder response = new StringBuilder("");
+		BufferedReader br = null;
+		try {
+			final URL url = new URL(urlstr);
+			final URLConnection urlc = url.openConnection();
+			urlc.setRequestProperty("Accept", "application/json");
+			urlc.setDoOutput(true);
+			final PrintStream ps = new PrintStream(urlc.getOutputStream());
+			ps.print(params);
+			ps.close();
+			br = new BufferedReader(new InputStreamReader(urlc.getInputStream()));
+			String l = null;
+			while ((l = br.readLine()) != null) {
+				response.append(l);
+			}
+		} catch (Exception exc) {
+			CFLogs.SERVER_LOG.error(exc);
+			return null;
+		} finally {
+			try {
+				if (null != br) {
+					br.close();
+				}
+			} catch (IOException exc2) {
+				CFLogs.SERVER_LOG.error(exc2);
+			}
+		}
+		return response.toString();
+	}
+
+	private static String makeCfhttpCall(final String url, final String params) {
+		String response = "";
+		final HttpTag tag = new HttpTag(url + "?" + params);
+		tag.setLogFlag(false);
+		try {
+			response = (String) tag.runCall().getFilecontent();
+		} catch (Exception exc) {
+			CFLogs.SERVER_LOG.error(exc);
+			return null;
+		}
+		return response;
+	}
+
+	private String buildUserAuthUrl() {
+		final StringBuilder url = new StringBuilder();
+		url.append(isNull(this.authendpoint) ? OauthConstants.USER_AUTH_END_POINTS.get(this.type) : this.authendpoint)
+				.append("?client_id=").append(this.socialclientid).append("&redirect_uri=").append(this.redirecturi)
+				.append("&scope=").append(this.scope).append("&state=").append(this.state).append("&response_type=")
+				.append("code");
+		if (!isNull(this.urlparams)) {
+			url.append("&" + this.urlparams);
+		}
+		return url.toString();
+	}
+
+	private String buildAppAuthUrl(final String code, final String redirecturi) {
+		final StringBuilder url = new StringBuilder();
+		url.append("client_id=").append(this.socialclientid).append("&redirect_uri=").append(redirecturi)
+				.append("&client_secret=").append(this.secretkey).append("&code=").append(code)
+				.append("&grant_type=authorization_code");
+		return url.toString();
+	}
+
+	private void handleError(final HttpServletRequest req) {
+		final Struct r = new Struct();
+		r.put("error", req.getParameter("error"));
+		r.put("error_description", req.getParameter("error_description"));
+		r.put("error_reason", req.getParameter("error_reason"));
+		r.put("state", req.getParameter("state"));
+		this.pageContext.setAttribute(this.result, (Object) r);
+	}
+
+	private boolean isError(final HttpServletRequest req) {
+		return req.getParameter("error") != null;
+	}
+
+	private boolean isFirstCall(final HttpServletRequest req) {
+		return req.getParameter("code") == null;
+	}
+
+	public static boolean invalidateOauthAccesstoken(final String token, final String type) {
+		if ("google".equalsIgnoreCase(type)) {
+			return invalidateGoogleAccesstoken(token);
+		}
+		if ("facebook".equalsIgnoreCase(type)) {
+			return invalidateFacebookAccesstoken(token);
+		}
+		throw new OauthCannotInvalidateTokenException();
+	}
+
+	private static boolean invalidateFacebookAccesstoken(final String token) {
+		final String url = "https://graph.facebook.com/me/permissions";
+		final String params = "method=delete&access_token=" + token;
+		return checkToken(url, params);
+	}
+
+	private static boolean invalidateGoogleAccesstoken(final String token) {
+		final String url = "https://accounts.google.com/o/oauth2/revoke";
+		final String params = "token=" + token;
+		return checkToken(url, params);
+	}
+
+	public static boolean isValidOauthAccesstoken(final String token, final String type) {
+		final String api = OauthConstants.API_END_POINTS.get(type.toLowerCase());
+		if (isNull(api)) {
+			throw new OauthCannotInvalidateTokenException();
+		}
+		final String params = "access_token=" + token;
+		return checkToken(api, params);
+	}
+
+	private static boolean checkToken(final String api, final String params) {
+		final String response = makeCfhttpCall(api, params);
+		if (null == response) {
+			return false;
+		}
+		if (0 == response.length() || "true".equalsIgnoreCase(response)) {
+			return true;
+		}
+		final Struct struct = (Struct) JSONUtils.deserializeJSON(response);
+		if (struct.get("error") != null) {
+			CFLogs.APPLICATION_LOG.error("Invalid accesstoken : " + response);
+			return false;
+		}
+		return true;
+	}
+
+	private void validateType() {
+		if (!isNull(this.type) && (!isNull(this.authendpoint) || !isNull(this.accesstokenendpoint))) {
+			throw new OauthNoTypeException();
+		}
+		if (isNull(this.type) && (isNull(this.authendpoint) || isNull(this.accesstokenendpoint))) {
+			throw new OauthNoTypeAndEndpointsException();
+		}
+		if (!isNull(this.type) && !"google".equals(this.type) && !"facebook".equals(this.type)) {
+			throw new OauthInvalidTypeException();
+		}
+	}
+
+	private void validateScretkey() {
+		if (isNull(this.secretkey)) {
+			throw new OauthNoSecretkeyException();
+		}
+	}
+
+	private static boolean isNull(final String string) {
+		return null == string || "".equals(string);
+	}
+
+	@Override
+	public void release() {
+		this.socialclientid = null;
+		this.scope = null;
+		this.state = null;
+		this.type = null;
+		this.authendpoint = null;
+		this.accesstokenendpoint = null;
+		this.redirecturi = null;
+		this.secretkey = null;
+		this.result = null;
+	}
+
+	public void setClientid(final String socialclientid) {
+		this.socialclientid = socialclientid;
+	}
+
+	public String getSocialclientid() {
+		return this.socialclientid;
+	}
+
+	public void setScope(final String scope) {
+		this.scope = scope.toLowerCase();
+	}
+
+	public String getScope() {
+		return this.scope;
+	}
+
+	public void setState(final String state) {
+		this.state = state;
+	}
+
+	public String getState() {
+		return this.state;
+	}
+
+	public void setType(final String type) {
+		this.type = type.toLowerCase();
+	}
+
+	public String getType() {
+		return this.type;
+	}
+
+	public void setAuthendpoint(final String authendpoint) {
+		this.authendpoint = authendpoint;
+	}
+
+	public String getAuthendpoint() {
+		return this.authendpoint;
+	}
+
+	public void setAccesstokenendpoint(final String accesstokenendpoint) {
+		this.accesstokenendpoint = accesstokenendpoint;
+	}
+
+	public String getAccesstokenendpoint() {
+		return this.accesstokenendpoint;
+	}
+
+	public void setSecretkey(final String secretkey) {
+		this.secretkey = secretkey;
+	}
+
+	public String getSecretkey() {
+		return this.secretkey;
+	}
+
+	public void setResult(final String result) {
+		this.result = result;
+	}
+
+	public String getResult() {
+		return this.result;
+	}
+
+	public void setRedirecturi(final String redirecturi) {
+		this.redirecturi = redirecturi;
+	}
+
+	public String getRedirecturi() {
+		return this.redirecturi;
+	}
+
+	public void setUrlparams(final String extraoptions) {
+		this.urlparams = extraoptions;
+	}
+
+	public String getUrlparams() {
+		return this.urlparams;
+	}
+
+	public static class OauthNoTypeException extends ExpressionException {
+	}
+
+	public static class OauthNoEndpointsException extends ExpressionException {
+	}
+
+	public static class OauthNoTypeAndEndpointsException extends ExpressionException {
+	}
+
+	public static class OauthNoSecretkeyException extends ExpressionException {
+	}
+
+	public static class OauthServiceException extends ExpressionException {
+	}
+
+	public static class OauthInvalidTypeException extends ExpressionException {
+	}
+
+	public static class OauthCannotInvalidateTokenException extends ExpressionException {
+	}
+
+	public static class OauthAppAuthenticationException extends ExpressionException {
+		public OauthAppAuthenticationException(final Throwable e) {
+			super(e);
+		}
+	}
+}

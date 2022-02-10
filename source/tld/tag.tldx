@@ -1,0 +1,91 @@
+<!DOCTYPE taglib PUBLIC "-//Railo//DTD CFML Tag Library 1.0//EN"
+	"dtd/web-cfmtaglibrary_1_0.dtd">
+<taglib>
+	<tlib-version>1.0</tlib-version>
+	<cfml-version>1.0</cfml-version>
+	<short-name>pdf-extension</short-name>
+	<uri>http://extension.lucee.org/tag/pdf</uri>
+	<display-name>PDF</display-name>
+	<description>
+		Tags to interact with PDF
+	</description>
+	<name-space>cf</name-space>
+	<name-space-separator></name-space-separator>
+	<el>
+		<el-class>lucee.transformer.cfml.expression.CFMLExprTransformer</el-class>
+	</el>
+	
+	<!-- OAuth -->
+	<tag>
+		<name>OAuth</name>
+		<tag-class bundle-name="{bundle-name}" bundle-version="{bundle-version}">org.lucee.extension.oauth2.tag.OAuth2</tag-class>
+		<body-content>empty</body-content>
+		<body-rtexprvalue>false</body-rtexprvalue>
+		<script>
+			<type>multiple</type>
+			<rtexprvalue>true</rtexprvalue>
+		</script>
+		<description>With help of this tag you can use a OAuth2 Provider (FACEBOOK, FOURSQUARE, GITHUB, GOOGLE, INSTAGRAM, LINKEDIN, MICROSOFT, PAYPAL, REDDIT, SALESFORCE, YAMMER) for authentication. </description>
+		<attribute-type>fixed</attribute-type>
+		<attribute>
+			<type>string</type>
+			<name>type</name>
+			<required>true</required>
+			<rtexprvalue>true</rtexprvalue>
+		    <description>Authetication provider you wanna use to authenticate, possible values are:
+		    FACEBOOK, FOURSQUARE, GITHUB, GOOGLE, INSTAGRAM, LINKEDIN, MICROSOFT, PAYPAL, REDDIT, SALESFORCE, YAMMER. You can also use a custom OAuth2 provider with help of the attribute "authendpoint"</description>
+		</attribute>
+		<attribute>
+			<type>string</type>
+			<name>clientid</name>
+			<required>true</required>
+			<rtexprvalue>true</rtexprvalue>
+		    <description>client id provided by your authentication provider (FACEBOOK, GOOGLE, ...).</description>
+		</attribute>
+		<attribute>
+			<type>string</type>
+			<name>secretKey</name>
+			<alias>secret</alias>
+			<required>true</required>
+			<rtexprvalue>true</rtexprvalue>
+		    <description>secret key provided by your authentication provider (FACEBOOK, GOOGLE, ...).</description>
+		</attribute>
+		<attribute>
+			<type>string</type>
+			<name>scope</name>
+			<required>false</required>
+			<rtexprvalue>true</rtexprvalue>
+		    <description>The scope of that you wanna have from the provider, the format of the scope dependes on the provider  (FACEBOOK, GOOGLE, ...) used. Consult the provider for details.</description>
+		</attribute>
+		<attribute>
+			<type>string</type>
+			<name>state</name>
+			<required>false</required>
+			<rtexprvalue>true</rtexprvalue>
+		    <description>pass through data. An data provided here, is returned by the authenticator after a sucessfull autentication.</description>
+		</attribute>
+		<attribute>
+			<type>string</type>
+			<name>redirecturi</name>
+			<required>false</required>
+			<rtexprvalue>true</rtexprvalue>
+		    <description>URL to redirect to after a sucessful authentication.</description>
+		</attribute>
+		<attribute>
+			<type>string</type>
+			<name>result</name>
+			<required>false</required>
+			<rtexprvalue>true</rtexprvalue>
+		    <description></description>
+		</attribute>
+
+		<!--
+	private String authendpoint;
+	private String secretkey;
+	private String accesstokenendpoint;
+	private String result;
+	private URL redirecturi;
+		-->
+
+	</tag>
+</taglib>
